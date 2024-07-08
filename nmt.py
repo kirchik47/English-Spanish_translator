@@ -1,12 +1,27 @@
 import numpy as np
-from tensorflow import keras
-import tensorflow as tf
 import pathlib
 from collections import Counter
 import pandas as pd
+import os
+import time
+
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+from transformers.keras_callbacks import PushToHubCallback
+from huggingface_hub import login, HfApi, push_to_hub_keras
+# from tensorflow import keras
+import tensorflow as tf
+import keras
 
 
+login(token=os.getenv('HF_TOKEN'))
+
+cur_dir = pathlib.Path(__file__).parent.resolve()
+filepath = 'nmt_model_N=4_dropout=0.2_heads=8_vocab_size=10002_BPE.keras'
+    
 np.random.seed(42)
+tf.random.set_seed(42)
+
 @keras.saving.register_keras_serializable()
 class PositionalEncoding(keras.layers.Layer):
     def __init__(self, max_length, embed_size, dtype=tf.float64, **kwargs):
@@ -117,18 +132,18 @@ class Tokenizer(keras.layers.Layer):
 @keras.saving.register_keras_serializable()
 class CHRF(keras.metrics.Metric):
     def __init__(self, n_grams=3, name='chrf', **kwargs):
-        super().__init__(name, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.n_grams = n_grams
-        self.chrf_score = self.add_weight('chrf_score', initializer='zeros')
-        self.count = self.add_weight('count', initializer='zeros')
+        self.chrf_score = self.add_weight(name='chrf_score', initializer='zeros')
+        self.count = self.add_weight(name='count', initializer='zeros')
     
     def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = tf.argmax(y_pred, axis=-1)
+        y_pred = keras.ops.amax(y_pred, axis=-1)
 
-        indices = tf.concat([tf.range(i, i + y_true.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
-        references = tf.concat([tf.gather(y_true, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
-        indices = tf.concat([tf.range(i, i + y_pred.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
-        predictions = tf.concat([tf.gather(y_pred, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
+        indices = keras.ops.concatenate([keras.ops.arange(i, i + y_true.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
+        references = keras.ops.concatenate([keras.ops.take(y_true, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
+        indices = keras.ops.concatenate([keras.ops.arange(i, i + y_pred.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
+        predictions = keras.ops.concatenate([keras.ops.take(y_pred, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
 
         references = tf.strings.reduce_join(tf.as_string(references), axis=-1)
         predictions = tf.strings.reduce_join(tf.as_string(predictions), axis=-1)
@@ -138,16 +153,16 @@ class CHRF(keras.metrics.Metric):
 
         common_ngrams = tf.sets.intersection([references], [predictions])
         num_common_ngrams = tf.shape(common_ngrams.values)[0]
-        precision = tf.cond(tf.size(predictions) > 0, 
+        precision = keras.ops.cond(tf.size(predictions) > 0, 
                         lambda: num_common_ngrams / tf.size(predictions), 
                         lambda: tf.cast(0.0, tf.float64))
-        recall = tf.cond(tf.size(references) > 0, 
+        recall = keras.ops.cond(tf.size(references) > 0, 
                      lambda: num_common_ngrams / tf.size(references), 
                      lambda: tf.cast(0.0, tf.float64))
-        f1_score = tf.cond(precision + recall > 0, 
+        f1_score = keras.ops.cond(precision + recall > 0, 
                    lambda: 2 * (precision * recall) / (precision + recall), 
                    lambda: tf.cast(0.0, tf.float64))
-        f1_score = tf.cast(f1_score, tf.float32)
+        f1_score = keras.ops.cast(f1_score, tf.float32)
         self.chrf_score.assign_add(f1_score)
         self.count.assign_add(1)
 
@@ -162,11 +177,15 @@ class CHRF(keras.metrics.Metric):
         return super().get_config(**kwargs)
     
     
-    
+def get_dir():
+    log_dir = os.path.join(cur_dir, 'nmt_logs')
+    run_dir = os.path.join(log_dir, time.strftime('run_%Y-%m-%d %H-%M-%S') + filepath)
+    return run_dir
+
 def translate(sentence_en, model_path):
     en_tokenizer = Tokenizer(merges_en, max_length)
     es_tokenizer = Tokenizer(merges_es, max_length)
-    model = keras.models.load_model(model_path)
+    model = keras.models.load_model(model_path, custom_objects={'CHRF': CHRF})
     translation = ""
     X = en_tokenizer(tf.constant([sentence_en]))
 
@@ -174,12 +193,12 @@ def translate(sentence_en, model_path):
         X_dec = es_tokenizer(tf.constant([translation]), sos=True)
         y_proba = model.predict((X, X_dec))[0, word_idx]
         predicted_word_id = np.argmax(y_proba)
-        print(predicted_word_id)
+        print(word_idx)
         predicted_word = es_tokenizer(tf.constant([[predicted_word_id]]), encode=False)[0]
         print(translation)
         if predicted_word == 'endofseq':
             break
-        translation += "" + predicted_word
+        translation += predicted_word
     return translation
 
 
@@ -195,8 +214,8 @@ def get_data():
     return sentences_en, sentences_es
 
 def build_model():
-    encoder_inputs_ids = keras.layers.Input(shape=[max_length], dtype=tf.int64)
-    decoder_inputs_ids = keras.layers.Input(shape=[max_length], dtype=tf.int64)
+    encoder_inputs_ids = keras.Input(shape=[max_length], dtype=tf.int64)
+    decoder_inputs_ids = keras.Input(shape=[max_length], dtype=tf.int64)
 
     encoder_embedding_layer = keras.layers.Embedding(vocab_size, output_dim=embed_size, mask_zero=True)
     decoder_embedding_layer = keras.layers.Embedding(vocab_size, output_dim=embed_size, mask_zero=True)
@@ -204,14 +223,14 @@ def build_model():
     # pos_embed = keras.layers.Embedding(max_length, embed_size)
     encoder_embeddings = encoder_embedding_layer(encoder_inputs_ids)
     encoder_in = pos_encoding(encoder_embeddings)
-    print(tf.shape(encoder_in))
+    # print(tf.shape(encoder_in))
 
     N = 4
     num_heads = 8
     n_units = 128
     dropout_rate= 0.2
-    encoding_mask = tf.math.not_equal(encoder_inputs_ids, 0)[:, tf.newaxis]
-    print(tf.shape(encoding_mask))
+    encoding_mask = keras.ops.not_equal(encoder_inputs_ids, 0)[:, tf.newaxis]
+    # print(tf.shape(encoding_mask))
     Z = encoder_in
     for _ in range(N):
         skip = Z
@@ -226,14 +245,12 @@ def build_model():
 
 
     decoder_embeddings = decoder_embedding_layer(decoder_inputs_ids)
-    batch_max_len_dec = tf.shape(decoder_embeddings)[1]
-    # print(batch_max_len_dec)
     decoder_in = pos_encoding(decoder_embeddings)
 
+    decoding_mask = keras.ops.not_equal(decoder_inputs_ids, 0)[:, tf.newaxis]
+    batch_max_len = keras.ops.shape(decoder_embeddings)[1]
+    decoding_causal_mask = keras.ops.tri(batch_max_len, batch_max_len, 0, dtype=tf.bool)
 
-    decoding_mask = tf.math.not_equal(decoder_inputs_ids, 0)[:, tf.newaxis]
-    decoding_causal_mask = tf.linalg.band_part(tf.ones(shape=(batch_max_len_dec, batch_max_len_dec), dtype=tf.bool), -1, 0)
-    # print(decoding_causal_mask.numpy())
     encoder_outputs = Z
     Z = decoder_in
     for _ in range(N):
@@ -257,6 +274,7 @@ def build_model():
     model = keras.models.Model(inputs=[encoder_inputs_ids, decoder_inputs_ids], outputs=y_proba)
     return model
 
+
 def train():
     en_tokenizer = Tokenizer(merges_en, max_length)
     es_tokenizer = Tokenizer(merges_es, max_length)
@@ -272,15 +290,17 @@ def train():
     y_train = es_tokenizer(tf.constant(sentences_es[:100_000]), eos=True)
     y_valid = es_tokenizer(tf.constant(sentences_es[100_000:]), eos=True)
 
-    # model = build_model()
-    model = keras.models.load_model('nmt_model_N=4_dropout=0.2_heads=8_vocab_size=10002_BPE', custom_objects={'chrf': CHRF(3)})
-    callbacks = [keras.callbacks.ModelCheckpoint('nmt_model_N=4_dropout=0.2_heads=8_vocab_size=10002_BPE', save_best_only=True)]
-    # model.compile(optimizer='rmsprop', loss='sparse_categorical_crossentropy', metrics=["accuracy", CHRF(3)])
-    # model.load_weights('nmt_model_N=2_dropout=0.2_heads=8_vocab_size=10000_BPE.tf')
+    model = build_model()
+    # model = keras.models.load_model(filepath=filepath, custom_objects={'CHRF': CHRF}) 
+    
+    callbacks = [keras.callbacks.ModelCheckpoint(filepath, save_best_only=True), 
+                 keras.callbacks.ReduceLROnPlateau(),
+                 keras.callbacks.TensorBoard(log_dir=get_dir())]
     print(model.summary())
+    model.compile(optimizer='rmsprop', loss='sparse_categorical_crossentropy', metrics=["accuracy", CHRF(3)])
     # model.evaluate((X_valid, X_valid_dec), y_valid)
-    model.fit((X_train, X_train_dec), y_train, validation_data=((X_valid, X_valid_dec), y_valid), epochs=10, batch_size=128, callbacks=callbacks)
-    # model.save('nmt_model.keras')
+    model.fit((X_train, X_train_dec), y_train, validation_data=((X_valid, X_valid_dec), y_valid), epochs=3, batch_size=128, callbacks=callbacks)
+    # push_to_hub_keras(model, 'kirchik47/english-spanish-translator')
     return model
 
 
@@ -298,7 +318,5 @@ if __name__ == '__main__':
     merges_es = pd.read_csv('merges_es.csv')
     merges_es = {key: value for key, value in zip(zip(merges_es['pair0'], merges_es['pair1']), merges_es['idx'])}
     print(merges_es)
-    # chrf = CHRF(n_grams=2)
-    # chrf.update_state(tf.constant([[101, 102, 103, 105]]), tf.constant([[101, 102, 104]]))
     train()
-    print(translate("I like playing football and basketball in the evening", 'nmt_model_N=4_dropout=0.2_heads=8_vocab_size=10002_BPE'))
+    print(translate("They're sunbathing around the pool.", filepath))
