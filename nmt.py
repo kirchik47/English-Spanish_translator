@@ -8,13 +8,13 @@ import time
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 from transformers.keras_callbacks import PushToHubCallback
-from huggingface_hub import login, HfApi, push_to_hub_keras
+# from huggingface_hub import login, HfApi, push_to_hub_keras
 # from tensorflow import keras
 import tensorflow as tf
 import keras
 
 
-login(token=os.getenv('HF_TOKEN'))
+# login(token=os.getenv('HF_TOKEN'))
 
 cur_dir = pathlib.Path(__file__).parent.resolve()
 filepath = 'nmt_model_N=4_dropout=0.2_heads=8_vocab_size=10002_BPE.keras'
@@ -138,30 +138,28 @@ class CHRF(keras.metrics.Metric):
         self.count = self.add_weight(name='count', initializer='zeros')
     
     def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = keras.ops.amax(y_pred, axis=-1)
-
+        y_pred = keras.ops.argmax(y_pred, axis=-1)
         indices = keras.ops.concatenate([keras.ops.arange(i, i + y_true.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
         references = keras.ops.concatenate([keras.ops.take(y_true, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
         indices = keras.ops.concatenate([keras.ops.arange(i, i + y_pred.shape[1] - self.n_grams + 1)[:, tf.newaxis] for i in range(self.n_grams)], axis=-1)
         predictions = keras.ops.concatenate([keras.ops.take(y_pred, indices[i], axis=-1) for i in range(indices.shape[0])], axis=0)
-
         references = tf.strings.reduce_join(tf.as_string(references), axis=-1)
         predictions = tf.strings.reduce_join(tf.as_string(predictions), axis=-1)
-
-        references, _ = tf.unique(references)
-        predictions, _ = tf.unique(predictions)
-
-        common_ngrams = tf.sets.intersection([references], [predictions])
-        num_common_ngrams = tf.shape(common_ngrams.values)[0]
-        precision = keras.ops.cond(tf.size(predictions) > 0, 
-                        lambda: num_common_ngrams / tf.size(predictions), 
-                        lambda: tf.cast(0.0, tf.float64))
-        recall = keras.ops.cond(tf.size(references) > 0, 
-                     lambda: num_common_ngrams / tf.size(references), 
-                     lambda: tf.cast(0.0, tf.float64))
+        # print(tf.equal(predictions, references))
+        # references, _ = tf.unique(references)
+        # predictions, _ = tf.unique(predictions)
+        num_common_ngrams = keras.ops.cast(keras.ops.sum(keras.ops.equal(predictions, references)), tf.float64)
+        # common_ngrams = tf.sets.intersection([references], [predictions])
+        # num_common_ngrams = tf.shape(common_ngrams.values)[0]
+        precision = keras.ops.cond(keras.ops.shape(predictions)[0] > 0, 
+                        lambda: num_common_ngrams / keras.ops.cast(keras.ops.shape(predictions)[0], tf.float64), 
+                        lambda: keras.ops.cast(0.0, tf.float64))
+        recall = keras.ops.cond(keras.ops.shape(references)[0] > 0, 
+                     lambda: num_common_ngrams / keras.ops.cast(keras.ops.shape(references)[0], tf.float64), 
+                     lambda: keras.ops.cast(0.0, tf.float64))
         f1_score = keras.ops.cond(precision + recall > 0, 
                    lambda: 2 * (precision * recall) / (precision + recall), 
-                   lambda: tf.cast(0.0, tf.float64))
+                   lambda: keras.ops.cast(0.0, tf.float64))
         f1_score = keras.ops.cast(f1_score, tf.float32)
         self.chrf_score.assign_add(f1_score)
         self.count.assign_add(1)
