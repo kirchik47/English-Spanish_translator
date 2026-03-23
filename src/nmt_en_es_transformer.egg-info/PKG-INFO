@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: nmt-en-es-transformer
+Version: 0.1.0
+Summary: English-Spanish Neural Machine Translation using Transformer and BPE
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: tensorflow
+Requires-Dist: keras
+Requires-Dist: pandas
+Requires-Dist: transformers
+Requires-Dist: huggingface-hub
+
+Translator from English to Spanish. Model architecture is based on transformer architecture and BPE tokenization.
