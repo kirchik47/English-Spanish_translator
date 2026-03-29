@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/bpe.py
-src/nmt.py
-src/nmt_en_es_transformer.egg-info/PKG-INFO
-src/nmt_en_es_transformer.egg-info/SOURCES.txt
-src/nmt_en_es_transformer.egg-info/dependency_links.txt
-src/nmt_en_es_transformer.egg-info/requires.txt
-src/nmt_en_es_transformer.egg-info/top_level.txt

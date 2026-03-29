@@ -29,17 +29,25 @@ class PositionalEncoding(keras.layers.Layer):
         self.embed_size = embed_size
         P_matrix = np.empty(shape=(1, max_length, embed_size))
         p, i = np.meshgrid(np.arange(max_length), 2 * np.arange(embed_size // 2))
-        # print(p, i)
         P_matrix[0, :, ::2] = np.sin(p / 10000 ** (i / embed_size)).T
         P_matrix[0, :, 1::2] = np.cos(p / 10000 ** ((i - 1) / embed_size)).T
         self.pos_encodings = tf.constant(P_matrix)
         self.supports_masking = True
-        # print(self.pos_encodings)
 
     def call(self, inputs):
         # print(inputs.shape)
         batch_max_len = tf.shape(inputs)[1]
         return inputs + self.pos_encodings[:batch_max_len]
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "max_length": self.max_length,
+                "embed_size": self.embed_size,
+            }
+        )
+        return config
 
 
 class Tokenizer(keras.layers.Layer):
@@ -127,6 +135,16 @@ class Tokenizer(keras.layers.Layer):
             return tf.constant(tokenized_inputs)
         return tokenized_inputs
 
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "merges": self.merges,
+                "max_length": self.max_length,
+            }
+        )
+        return config
+
 
 @keras.saving.register_keras_serializable()
 class CHRF(keras.metrics.Metric):
@@ -195,8 +213,14 @@ class CHRF(keras.metrics.Metric):
         self.chrf_score.assign(0)
         self.count.assign(0)
 
-    def get_config(self, **kwargs):
-        return super().get_config(**kwargs)
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "n_grams": self.n_grams,
+            }
+        )
+        return config
 
 
 def get_dir():
@@ -228,8 +252,7 @@ def translate(sentence_en, model_path):
 def get_data():
     url = "https://storage.googleapis.com/download.tensorflow.org/data/spa-eng.zip"
     path = keras.utils.get_file("spa_eng.zip", origin=url, extract=True, cache_dir="nmt_datasets")
-    print(path)
-    text = (pathlib.Path(path).with_name("spa-eng") / "spa.txt").read_text(encoding="utf-8")
+    text = (pathlib.Path(path) / "spa-eng" / "spa.txt").read_text(encoding="utf-8")
     text = text.replace("¡", "").replace("¿", "")
     pairs = [line.split("\t") for line in text.splitlines()]
     np.random.shuffle(pairs)
@@ -253,9 +276,9 @@ def build_model():
     encoder_in = pos_encoding(encoder_embeddings)
     # print(tf.shape(encoder_in))
 
-    N = 4
+    N = 1
     num_heads = 8
-    n_units = 128
+    n_units = 32
     dropout_rate = 0.2
     encoding_mask = keras.ops.not_equal(encoder_inputs_ids, 0)[:, tf.newaxis]
     # print(tf.shape(encoding_mask))
@@ -311,13 +334,11 @@ def train():
     en_tokenizer = Tokenizer(merges_en, max_length)
     es_tokenizer = Tokenizer(merges_es, max_length)
 
-    # temp = es_tokenizer(tf.constant(['endofseq', 'govno']), encode=True)
-    # print(es_tokenizer(temp, encode=False), temp)
     X_train = en_tokenizer(tf.constant(sentences_en[:100_000]))
     X_valid = en_tokenizer(tf.constant(sentences_en[100_000:]))
-    # print(X_train)
+
     X_train_dec = es_tokenizer(tf.constant(sentences_es[:100_000]), sos=True)
-    print(X_train_dec)
+
     X_valid_dec = es_tokenizer(tf.constant(sentences_es[100_000:]), sos=True)
     y_train = es_tokenizer(tf.constant(sentences_es[:100_000]), eos=True)
     y_valid = es_tokenizer(tf.constant(sentences_es[100_000:]), eos=True)
@@ -355,13 +376,13 @@ if __name__ == "__main__":
     max_length = 50
     embed_size = 128
 
-    merges_en = pd.read_csv("data/merges_en.csv")
+    merges_en = pd.read_csv("src/data/merges_en.csv")
     merges_en = {
         key: value
         for key, value in zip(zip(merges_en["pair0"], merges_en["pair1"]), merges_en["idx"])
     }
 
-    merges_es = pd.read_csv("data/merges_es.csv")
+    merges_es = pd.read_csv("src/data/merges_es.csv")
     merges_es = {
         key: value
         for key, value in zip(zip(merges_es["pair0"], merges_es["pair1"]), merges_es["idx"])

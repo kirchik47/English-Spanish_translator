@@ -1,7 +1,7 @@
 from collections import Counter
 import numpy as np
 import pandas as pd
-from nmt import get_data
+from src.nmt import get_data
 
 
 def get_stats(ids):
